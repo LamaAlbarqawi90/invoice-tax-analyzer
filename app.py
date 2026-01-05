@@ -17,23 +17,21 @@ st.set_page_config(page_title="Invoice Tax Analyzer", layout="centered")
 st.title("Invoice Tax Analyzer")
 
 st.write(
-    "Enter the invoice total and tax **exactly as shown on the invoice**. "
-    "This tool analyzes how the tax could have been calculated."
+    "Enter the invoice total and tax exactly as shown on the invoice. "
+    "This tool analyzes how the tax may have been calculated."
 )
 
 # -------------------------
-# Inputs (TEXT ONLY)
+# Inputs (TEXT INPUTS — SAFE)
 # -------------------------
 invoice_str = st.text_input(
     "Invoice amount (JOD)",
-    placeholder="Example: 336.214",
-    type="text"
+    placeholder="Example: 336.214"
 )
 
 tax_str = st.text_input(
     "Total tax applied (JOD)",
-    placeholder="Example: 33.951",
-    type="text"
+    placeholder="Example: 33.951"
 )
 
 # -------------------------
@@ -58,18 +56,17 @@ selected_rates = st.multiselect(
 # Analysis functions
 # -------------------------
 def analyze_single_rate(invoice, tax, rate):
-    tax_calc = r(invoice * rate)
-    if tax_calc == r(tax):
+    calc_tax = r(invoice * rate)
+    if calc_tax == r(tax):
         return [{
             "Tax Rate": f"{int(rate * 100)}%",
             "Amount (JOD)": r(invoice),
-            "Tax (JOD)": tax_calc
+            "Tax (JOD)": calc_tax
         }]
     return None
 
 
 def analyze_two_rates(invoice, tax, r1, r2):
-    # Algebraic solution
     a = (tax - invoice * r2) / (r1 - r2)
 
     if a < 0 or a > invoice:
@@ -93,7 +90,6 @@ def analyze_two_rates(invoice, tax, r1, r2):
 # Run analysis
 # -------------------------
 if st.button("Analyze"):
-    # Basic validation
     if not invoice_str or not tax_str:
         st.warning("Please enter both invoice amount and tax.")
         st.stop()
