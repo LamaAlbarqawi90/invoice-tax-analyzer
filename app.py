@@ -1,98 +1,123 @@
 import streamlit as st
-from itertools import product
 
-# ---------------- Page Setup ----------------
-st.set_page_config(
-    page_title="Invoice Tax Analyzer",
-    layout="centered"
+st.set_page_config(page_title="Invoice Tax Analyzer", layout="centered")
+
+st.title("Invoice Tax Analyzer")
+st.write(
+    "Analyze how tax was calculated on an invoice using selected tax rates. "
+    "Supports exact accounting-style rounding."
 )
 
-# ---------------- Core Logic ----------------
-def analyze_tax(invoice_amount, total_tax, allowed_rates, step):
-    target_rate = total_tax / invoice_amount
-    rates = [r / 100 for r in allowed_rates]
-    chunks = int(invoice_amount // step)
-    solutions = []
-
-    for allocation in product(range(chunks + 1), repeat=len(rates)):
-        if sum(allocation) != chunks:
-            continue
-
-        weighted_rate = sum(
-            allocation[i] * rates[i] for i in range(len(rates))
-        ) / chunks
-
-        if abs(weighted_rate - target_rate) < 0.002:
-            solution = []
-            for i, units in enumerate(allocation):
-                if units > 0:
-                    amount = units * step
-                    solution.append({
-                        "Tax Rate": f"{allowed_rates[i]}%",
-                        "Amount (JOD)": amount,
-                        "Tax (JOD)": round(amount * rates[i], 2)
-                    })
-            solutions.append(solution)
-
-    return solutions
-
-
-def find_solutions(invoice, tax, allowed_rates):
-    for step in [50, 25, 10]:
-        results = analyze_tax(invoice, tax, allowed_rates, step)
-        if results:
-            return results
-    return []
-
-
-# ---------------- UI ----------------
-st.title("🧾 Invoice Tax Analyzer")
-st.caption(
-    "Explain how mixed tax rates could produce the total tax on an invoice."
-)
-
+# -------------------------
+# Inputs
+# -------------------------
 invoice = st.number_input(
-    "Invoice amount (before tax)",
+    "Invoice amount (JOD)",
     min_value=0.0,
-    step=50.0
+    step=0.001,
+    format="%.3f"
 )
 
 tax = st.number_input(
-    "Total tax applied",
+    "Total tax applied (JOD)",
     min_value=0.0,
-    step=1.0
+    step=0.001,
+    format="%.3f"
 )
 
-st.subheader("Applicable tax rates (optional)")
-st.caption("Leave all unchecked to try all standard rates.")
+available_rates = [0.16, 0.08, 0.05, 0.04, 0.02, 0.01]
 
-available_rates = [16, 8, 5, 4, 2, 1]
-selected_rates = [
-    r for r in available_rates
-    if st.checkbox(f"{r}%")
-]
+selected_rates = st.multiselect(
+    "Select applicable tax rates (optional)",
+    options=available_rates,
+    format_func=lambda r: f"{int(r*100)}%",
+)
 
-# If none selected, use all rates
-allowed_rates = selected_rates if selected_rates else available_rates
+rounding = 3
 
-if st.button("Analyze invoice"):
-    if invoice <= 0:
-        st.warning("Please enter a valid invoice amount.")
-    elif tax <= 0:
-        st.warning("Please enter a valid tax amount.")
+# -------------------------
+# Helper functions
+# -------------------------
+def analyze_single_rate(invoice, tax, rate):
+    calculated_tax = round(invoice * rate, rounding)
+    if calculated_tax == round(tax, rounding):
+        return [{
+            "Tax Rate": f"{int(rate*100)}%",
+            "Amount (JOD)": round(invoice, 3),
+            "Tax (JOD)": calculated_tax
+        }]
+    return None
+
+
+def analyze_two_rates(invoice, tax, r1, r2):
+    # Algebraic solution:
+    # a*r1 + (invoice - a)*r2 = tax
+    try:
+        a = (tax - invoice * r2) / (r1 - r2)
+    except ZeroDivisionError:
+        return None
+
+    if not (0 <= a <= invoice):
+        return None
+
+    part1 = round(a, 3)
+    part2 = round(invoice - part1, 3)
+
+    tax1 = round(part1 * r1, rounding)
+    tax2 = round(part2 * r2, rounding)
+
+    if round(tax1 + tax2, rounding) == round(tax, rounding):
+        return [
+            {"Tax Rate": f"{int(r1*100)}%", "Amount (JOD)": part1, "Tax (JOD)": tax1},
+            {"Tax Rate": f"{int(r2*100)}%", "Amount (JOD)": part2, "Tax (JOD)": tax2},
+        ]
+
+    return None
+
+
+# -------------------------
+# Analysis
+# -------------------------
+if st.button("Analyze"):
+    if invoice == 0 or tax == 0:
+        st.warning("Please enter both invoice amount and tax.")
     else:
-        results = find_solutions(invoice, tax, allowed_rates)
+        rates_to_use = selected_rates if selected_rates else available_rates
+        results_found = False
 
-        if not results:
+        # ---- Single rate check
+        for r in rates_to_use:
+            result = analyze_single_rate(invoice, tax, r)
+            if result:
+                st.success("✅ Tax matches a single tax rate")
+                st.table(result)
+                results_found = True
+                break
+
+        # ---- Two-rate check
+        if not results_found and len(rates_to_use) >= 2:
+            for i in range(len(rates_to_use)):
+                for j in range(i + 1, len(rates_to_use)):
+                    r1, r2 = rates_to_use[i], rates_to_use[j]
+                    result = analyze_two_rates(invoice, tax, r1, r2)
+                    if result:
+                        st.success("✅ Tax matches a combination of two rates")
+                        st.table(result)
+                        results_found = True
+                        break
+                if results_found:
+                    break
+
+        if not results_found:
             st.error(
-                "No valid tax breakdown found using the selected tax rates."
-            )
-        else:
-            st.success(
-                f"Possible explanation(s) for {tax:.2f} JOD tax on a "
-                f"{invoice:.2f} JOD invoice:"
+                "❌ No valid tax breakdown found using the selected rates.\n\n"
+                "Possible reasons:\n"
+                "- Different rounding rules\n"
+                "- More than two tax rates applied\n"
+                "- Line-level rather than invoice-level tax"
             )
 
-            for i, solution in enumerate(results, 1):
-                st.markdown(f"### Option {i}")
-                st.table(solution)
+# -------------------------
+# Footer
+# -------------------------
+st.caption("Rounding applied to 3 decimal places (standard accounting practice).")
