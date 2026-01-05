@@ -22,7 +22,7 @@ def analyze_tax(invoice_amount, total_tax, allowed_rates, step):
             allocation[i] * rates[i] for i in range(len(rates))
         ) / chunks
 
-        if abs(weighted_rate - target_rate) < 0.0005:
+        if abs(weighted_rate - target_rate) < 0.002:
             solution = []
             for i, units in enumerate(allocation):
                 if units > 0:
