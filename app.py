@@ -1,8 +1,6 @@
 import streamlit as st
 from decimal import Decimal, ROUND_HALF_UP, getcontext
 
-st.write("DEPLOYMENT VERSION: 2026-01-04-DECIMAL-UI-FIX")
-
 # -------------------------
 # Decimal configuration
 # -------------------------
