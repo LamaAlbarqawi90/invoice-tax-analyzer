@@ -1,5 +1,6 @@
 import streamlit as st
 from decimal import Decimal, ROUND_HALF_UP, getcontext
+from itertools import combinations
 
 # -------------------------
 # Decimal configuration
@@ -17,25 +18,18 @@ st.set_page_config(page_title="Invoice Tax Analyzer", layout="centered")
 st.title("Invoice Tax Analyzer")
 
 st.write(
-    "Enter the invoice total and tax exactly as shown on the invoice. "
-    "This tool analyzes how the tax may have been calculated."
+    "This tool finds **all valid tax breakdowns** that match the invoice total, "
+    "tax total, and the selected tax rates. No assumptions or preferences are applied."
 )
 
 # -------------------------
-# Inputs (TEXT INPUTS — SAFE)
+# Inputs (text to preserve precision)
 # -------------------------
-invoice_str = st.text_input(
-    "Invoice amount (JOD)",
-    placeholder="Example: 336.214"
-)
-
-tax_str = st.text_input(
-    "Total tax applied (JOD)",
-    placeholder="Example: 33.951"
-)
+invoice_str = st.text_input("Invoice amount (JOD)", placeholder="Example: 950")
+tax_str = st.text_input("Total tax applied (JOD)", placeholder="Example: 82")
 
 # -------------------------
-# Tax rates
+# Tax rates as checkboxes
 # -------------------------
 available_rates = [
     Decimal("0.16"),
@@ -46,100 +40,98 @@ available_rates = [
     Decimal("0.01"),
 ]
 
-selected_rates = st.multiselect(
-    "Select applicable tax rates (optional)",
-    options=available_rates,
-    format_func=lambda r: f"{int(r * 100)}%",
-)
+st.write("Select the tax rates to analyze:")
+
+selected_rates = []
+for rate in available_rates:
+    if st.checkbox(f"{int(rate*100)}%", value=False):
+        selected_rates.append(rate)
 
 # -------------------------
-# Analysis functions
+# Analysis helpers
 # -------------------------
-def analyze_single_rate(invoice, tax, rate):
-    calc_tax = r(invoice * rate)
-    if calc_tax == r(tax):
-        return [{
-            "Tax Rate": f"{int(rate * 100)}%",
-            "Amount (JOD)": r(invoice),
-            "Tax (JOD)": calc_tax
-        }]
-    return None
-
+def analyze_one_rate(invoice, tax, rate):
+    solutions = []
+    if r(invoice * rate) == r(tax):
+        solutions.append([
+            {"Tax Rate": f"{int(rate*100)}%", "Amount (JOD)": r(invoice), "Tax (JOD)": r(tax)}
+        ])
+    return solutions
 
 def analyze_two_rates(invoice, tax, r1, r2):
+    solutions = []
     a = (tax - invoice * r2) / (r1 - r2)
+    if 0 <= a <= invoice:
+        a = r(a)
+        b = r(invoice - a)
+        if r(a*r1 + b*r2) == r(tax):
+            solutions.append([
+                {"Tax Rate": f"{int(r1*100)}%", "Amount (JOD)": a, "Tax (JOD)": r(a*r1)},
+                {"Tax Rate": f"{int(r2*100)}%", "Amount (JOD)": b, "Tax (JOD)": r(b*r2)},
+            ])
+    return solutions
 
-    if a < 0 or a > invoice:
-        return None
-
-    part1 = r(a)
-    part2 = r(invoice - part1)
-
-    tax1 = r(part1 * r1)
-    tax2 = r(part2 * r2)
-
-    if r(tax1 + tax2) == r(tax):
-        return [
-            {"Tax Rate": f"{int(r1 * 100)}%", "Amount (JOD)": part1, "Tax (JOD)": tax1},
-            {"Tax Rate": f"{int(r2 * 100)}%", "Amount (JOD)": part2, "Tax (JOD)": tax2},
-        ]
-
-    return None
+def analyze_three_rates(invoice, tax, rates):
+    solutions = []
+    step = Decimal("1")  # 1 JOD granularity
+    r1, r2, r3 = rates
+    a = Decimal("0")
+    while a <= invoice:
+        b = Decimal("0")
+        while a + b <= invoice:
+            c = invoice - a - b
+            total_tax = r(a*r1 + b*r2 + c*r3)
+            if total_tax == r(tax):
+                solutions.append([
+                    {"Tax Rate": f"{int(r1*100)}%", "Amount (JOD)": r(a), "Tax (JOD)": r(a*r1)},
+                    {"Tax Rate": f"{int(r2*100)}%", "Amount (JOD)": r(b), "Tax (JOD)": r(b*r2)},
+                    {"Tax Rate": f"{int(r3*100)}%", "Amount (JOD)": r(c), "Tax (JOD)": r(c*r3)},
+                ])
+            b += step
+        a += step
+    return solutions
 
 # -------------------------
 # Run analysis
 # -------------------------
 if st.button("Analyze"):
-    if not invoice_str or not tax_str:
-        st.warning("Please enter both invoice amount and tax.")
-        st.stop()
-
-    if "," in invoice_str or "," in tax_str:
-        st.error("Please use a dot (.) as the decimal separator.")
-        st.stop()
-
     try:
         invoice = Decimal(invoice_str)
         tax = Decimal(tax_str)
     except:
-        st.error("Invalid number format.")
+        st.error("Please enter valid numeric values.")
         st.stop()
 
-    rates = selected_rates if selected_rates else available_rates
-    found = False
+    if not selected_rates:
+        st.error("Please select at least one tax rate.")
+        st.stop()
 
-    # Single-rate check
-    for rate in rates:
-        result = analyze_single_rate(invoice, tax, rate)
-        if result:
-            st.success("✅ Tax matches a single tax rate")
-            st.table(result)
-            found = True
-            break
+    all_solutions = []
 
-    # Two-rate check
-    if not found and len(rates) >= 2:
-        for i in range(len(rates)):
-            for j in range(i + 1, len(rates)):
-                result = analyze_two_rates(invoice, tax, rates[i], rates[j])
-                if result:
-                    st.success("✅ Tax matches a combination of two rates")
-                    st.table(result)
-                    found = True
-                    break
-            if found:
-                break
+    # 1-rate
+    if len(selected_rates) >= 1:
+        for r1 in selected_rates:
+            all_solutions.extend(analyze_one_rate(invoice, tax, r1))
 
-    if not found:
-        st.error(
-            "❌ No valid tax breakdown found.\n\n"
-            "Possible reasons:\n"
-            "- Line-level rounding\n"
-            "- More than two tax rates applied\n"
-            "- Different rounding rules"
-        )
+    # 2-rate
+    if len(selected_rates) >= 2:
+        for r1, r2 in combinations(selected_rates, 2):
+            all_solutions.extend(analyze_two_rates(invoice, tax, r1, r2))
+
+    # 3-rate
+    if len(selected_rates) >= 3:
+        for r1, r2, r3 in combinations(selected_rates, 3):
+            all_solutions.extend(analyze_three_rates(invoice, tax, (r1, r2, r3)))
+
+    if not all_solutions:
+        st.error("❌ No valid tax breakdowns found.")
+    else:
+        st.success(f"✅ Found {len(all_solutions)} valid solution(s)")
+        for idx, solution in enumerate(all_solutions, start=1):
+            st.write(f"### Solution {idx}")
+            st.table(solution)
 
 # -------------------------
 # Footer
 # -------------------------
-st.caption("Rounding: 3 decimals, HALF-UP (standard accounting practice).")
+st.caption("Rounding: 3 decimals, HALF-UP. Multiple solutions may exist.")
