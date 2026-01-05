@@ -73,7 +73,7 @@ def analyze_two_rates(invoice, tax, r1, r2):
 
 def analyze_three_rates(invoice, tax, rates):
     solutions = []
-    step = Decimal("1")  # 1 JOD granularity
+    step = Decimal("5")  # 1 JOD granularity
     r1, r2, r3 = rates
     a = Decimal("0")
     while a <= invoice:
