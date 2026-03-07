@@ -1,137 +1,166 @@
 import streamlit as st
-from decimal import Decimal, ROUND_HALF_UP, getcontext
 from itertools import combinations
 
-# -------------------------
-# Decimal configuration
-# -------------------------
-getcontext().prec = 12
-ROUND_TO = Decimal("0.001")
-
-def r(x):
-    return x.quantize(ROUND_TO, rounding=ROUND_HALF_UP)
-
-# -------------------------
-# Page config
-# -------------------------
-st.set_page_config(page_title="Invoice Tax Analyzer", layout="centered")
-st.title("Invoice Tax Analyzer")
-
-st.write(
-    "This tool finds **all valid tax breakdowns** that match the invoice total, "
-    "tax total, and the selected tax rates. No assumptions or preferences are applied."
+# ---------------- Page Setup ----------------
+st.set_page_config(
+    page_title="Invoice Tax Analyzer",
+    layout="centered"
 )
 
-# -------------------------
-# Inputs (text to preserve precision)
-# -------------------------
-invoice_str = st.text_input("Invoice amount (JOD)", placeholder="Example: 950")
-tax_str = st.text_input("Total tax applied (JOD)", placeholder="Example: 82")
+# ---------------- Core Algebra Engine ----------------
+def solve_algebra(invoice, tax, allowed_rates, exact_only):
 
-# -------------------------
-# Tax rates as checkboxes
-# -------------------------
-available_rates = [
-    Decimal("0.16"),
-    Decimal("0.08"),
-    Decimal("0.05"),
-    Decimal("0.04"),
-    Decimal("0.02"),
-    Decimal("0.01"),
+    invoice = round(invoice, 3)
+    tax = round(tax, 3)
+
+    tolerance = 0 if exact_only else 0.001
+    solutions = []
+
+    # ---------- 1 RATE (Unlimited) ----------
+    for r in allowed_rates:
+        rate = r / 100
+        if abs(invoice * rate - tax) <= tolerance:
+            solutions.append([
+                {
+                    "Tax Rate": f"{r}%",
+                    "Amount (JOD)": round(invoice, 3),
+                    "Tax (JOD)": round(tax, 3)
+                }
+            ])
+
+    # ---------- 2 RATES (Unlimited) ----------
+    for r1, r2 in combinations(allowed_rates, 2):
+
+        d1, d2 = r1/100, r2/100
+
+        if abs(d1 - d2) < 1e-12:
+            continue
+
+        # Solve:
+        # x + y = invoice
+        # d1*x + d2*y = tax
+
+        x = (tax - invoice * d2) / (d1 - d2)
+        y = invoice - x
+
+        if x >= -tolerance and y >= -tolerance:
+            if abs(d1*x + d2*y - tax) <= tolerance:
+                solutions.append([
+                    {
+                        "Tax Rate": f"{r1}%",
+                        "Amount (JOD)": round(x, 3),
+                        "Tax (JOD)": round(x*d1, 3)
+                    },
+                    {
+                        "Tax Rate": f"{r2}%",
+                        "Amount (JOD)": round(y, 3),
+                        "Tax (JOD)": round(y*d2, 3)
+                    }
+                ])
+
+    # ---------- 3 RATES (LIMIT TO 25) ----------
+    max_three_rate = 25
+    three_rate_count = 0
+
+    step = 0.001  # mil precision
+
+    for r1, r2, r3 in combinations(allowed_rates, 3):
+
+        d1, d2, d3 = r1/100, r2/100, r3/100
+
+        x = 0.0
+        while x <= invoice:
+
+            remaining_invoice = invoice - x
+            remaining_tax = tax - d1 * x
+
+            if abs(d2 - d3) > 1e-12:
+
+                y = (remaining_tax - remaining_invoice * d3) / (d2 - d3)
+                z = remaining_invoice - y
+
+                if y >= -tolerance and z >= -tolerance:
+                    if abs(d2*y + d3*z - remaining_tax) <= tolerance:
+
+                        solutions.append([
+                            {
+                                "Tax Rate": f"{r1}%",
+                                "Amount (JOD)": round(x, 3),
+                                "Tax (JOD)": round(x*d1, 3)
+                            },
+                            {
+                                "Tax Rate": f"{r2}%",
+                                "Amount (JOD)": round(y, 3),
+                                "Tax (JOD)": round(y*d2, 3)
+                            },
+                            {
+                                "Tax Rate": f"{r3}%",
+                                "Amount (JOD)": round(z, 3),
+                                "Tax (JOD)": round(z*d3, 3)
+                            }
+                        ])
+
+                        three_rate_count += 1
+
+                        if three_rate_count >= max_three_rate:
+                            return solutions
+
+            x = round(x + step, 3)
+
+    return solutions
+
+
+# ---------------- UI ----------------
+st.title("🧾 Invoice Tax Analyzer")
+st.caption("Explain how mixed tax rates could produce the total tax on an invoice.")
+
+invoice = st.number_input(
+    "Invoice amount (before tax)",
+    min_value=0.0,
+    step=0.001,
+    format="%.3f"
+)
+
+tax = st.number_input(
+    "Total tax applied",
+    min_value=0.0,
+    step=0.001,
+    format="%.3f"
+)
+
+st.subheader("Applicable tax rates (optional)")
+st.caption("Leave all unchecked to try all standard rates.")
+
+available_rates = [16, 10, 5, 4, 2, 1]
+
+selected_rates = [
+    r for r in available_rates
+    if st.checkbox(f"{r}%")
 ]
 
-st.write("Select the tax rates to analyze:")
+allowed_rates = selected_rates if selected_rates else available_rates
 
-selected_rates = []
-for rate in available_rates:
-    if st.checkbox(f"{int(rate*100)}%", value=False):
-        selected_rates.append(rate)
+st.divider()
 
-# -------------------------
-# Analysis helpers
-# -------------------------
-def analyze_one_rate(invoice, tax, rate):
-    solutions = []
-    if r(invoice * rate) == r(tax):
-        solutions.append([
-            {"Tax Rate": f"{int(rate*100)}%", "Amount (JOD)": r(invoice), "Tax (JOD)": r(tax)}
-        ])
-    return solutions
+exact_only = st.checkbox("Exact solution only (0 cent tolerance)")
 
-def analyze_two_rates(invoice, tax, r1, r2):
-    solutions = []
-    a = (tax - invoice * r2) / (r1 - r2)
-    if 0 <= a <= invoice:
-        a = r(a)
-        b = r(invoice - a)
-        if r(a*r1 + b*r2) == r(tax):
-            solutions.append([
-                {"Tax Rate": f"{int(r1*100)}%", "Amount (JOD)": a, "Tax (JOD)": r(a*r1)},
-                {"Tax Rate": f"{int(r2*100)}%", "Amount (JOD)": b, "Tax (JOD)": r(b*r2)},
-            ])
-    return solutions
+if st.button("Analyze invoice"):
 
-def analyze_three_rates(invoice, tax, rates):
-    solutions = []
-    step = Decimal("10")  # 1 JOD granularity
-    r1, r2, r3 = rates
-    a = Decimal("0")
-    while a <= invoice:
-        b = Decimal("0")
-        while a + b <= invoice:
-            c = invoice - a - b
-            total_tax = r(a*r1 + b*r2 + c*r3)
-            if total_tax == r(tax):
-                solutions.append([
-                    {"Tax Rate": f"{int(r1*100)}%", "Amount (JOD)": r(a), "Tax (JOD)": r(a*r1)},
-                    {"Tax Rate": f"{int(r2*100)}%", "Amount (JOD)": r(b), "Tax (JOD)": r(b*r2)},
-                    {"Tax Rate": f"{int(r3*100)}%", "Amount (JOD)": r(c), "Tax (JOD)": r(c*r3)},
-                ])
-            b += step
-        a += step
-    return solutions
-
-# -------------------------
-# Run analysis
-# -------------------------
-if st.button("Analyze"):
-    try:
-        invoice = Decimal(invoice_str)
-        tax = Decimal(tax_str)
-    except:
-        st.error("Please enter valid numeric values.")
-        st.stop()
-
-    if not selected_rates:
-        st.error("Please select at least one tax rate.")
-        st.stop()
-
-    all_solutions = []
-
-    # 1-rate
-    if len(selected_rates) >= 1:
-        for r1 in selected_rates:
-            all_solutions.extend(analyze_one_rate(invoice, tax, r1))
-
-    # 2-rate
-    if len(selected_rates) >= 2:
-        for r1, r2 in combinations(selected_rates, 2):
-            all_solutions.extend(analyze_two_rates(invoice, tax, r1, r2))
-
-    # 3-rate
-    if len(selected_rates) >= 3:
-        for r1, r2, r3 in combinations(selected_rates, 3):
-            all_solutions.extend(analyze_three_rates(invoice, tax, (r1, r2, r3)))
-
-    if not all_solutions:
-        st.error("❌ No valid tax breakdowns found.")
+    if invoice <= 0:
+        st.warning("Please enter a valid invoice amount.")
+    elif tax <= 0:
+        st.warning("Please enter a valid tax amount.")
     else:
-        st.success(f"✅ Found {len(all_solutions)} valid solution(s)")
-        for idx, solution in enumerate(all_solutions, start=1):
-            st.write(f"### Solution {idx}")
-            st.table(solution)
+        results = solve_algebra(invoice, tax, allowed_rates, exact_only)
 
-# -------------------------
-# Footer
-# -------------------------
-st.caption("Rounding: 3 decimals, HALF-UP. Multiple solutions may exist.")
+        if not results:
+            st.error("No valid tax breakdown found.")
+        else:
+            st.success(
+                f"Possible explanation(s) for {tax:.3f} JOD tax "
+                f"on a {invoice:.3f} JOD invoice:"
+            )
+
+            for i, solution in enumerate(results, 1):
+                st.markdown(f"### Option {i}")
+                st.table(solution)
